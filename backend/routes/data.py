@@ -12,20 +12,6 @@ from backend.database.database import get_db
 router = APIRouter()
 
 
-def create_record(db: Session, payload: FuelData) -> FuelDataResponse:
-    # 1. Create a new database model instance from the payload
-    # We use **payload.dict() to unpack the Pydantic model into the DB model
-    db_record = FuelData(**payload.dict())
-
-    # 2. Add to the session and commit to the database
-    db.add(db_record)
-    db.commit()
-
-    # 3. Refresh to get the auto-generated ID from the DB
-    db.refresh(db_record)
-
-    return db_record
-
 def _append_alert(db: Session, station_id: str, fuel_type: str, alert_type: str, severity: str, message: str) -> None:
     """
     Saves a new alert to the SQLite database using the storage service.
@@ -108,34 +94,16 @@ def generate_alerts_from_record(db :Session ,record: FuelDataResponse) -> int:
 
 @router.get("/stations")
 def get_stations(db: Session = Depends(get_db)):
-    """Get all stations that have fuel data in the database."""
-    # Get distinct station_ids from fuel_data table
-    station_ids = db.query(models.FuelData.station_id).distinct().all()
-    station_ids = [s[0] for s in station_ids]
-    
-    # For now, return basic station info. In a real system, you'd have a stations table
-    stations = []
-    for station_id in station_ids:
-        # Get company and location from the most recent record for this station
-        latest_record = db.query(models.FuelData).filter(
-            models.FuelData.station_id == station_id
-        ).order_by(models.FuelData.timestamp.desc()).first()
-        
-        if latest_record:
-            # In a real system, you'd have a proper stations table with this metadata
-            # For now, we'll use mock data based on station_id
-            location_map = {
-                "BI00001": "Tunis Centre",
-                "BI00002": "Tunis Nord", 
-                "BI00003": "Sousse"
-            }
-            stations.append({
-                "station_id": station_id,
-                "company": "AGIL",
-                "location": location_map.get(station_id, f"Station {station_id}")
-            })
-    
-    return stations
+    """Get all stations that have been registered via ingestion."""
+    stations = db.query(models.Station).all()
+    return [
+        {
+            "station_id": s.station_id,
+            "company": s.company,
+            "location": s.location,
+        }
+        for s in stations
+    ]
 
 
 
@@ -197,6 +165,6 @@ def get_alerts(
 
 @router.get("/companies")
 def get_companies(db: Session = Depends(get_db)):
-    """Get all unique companies from stations."""
-    # For now, return AGIL since that's the only company in our mock data
-    return ["AGIL"]
+    """Get all unique companies from registered stations."""
+    companies = db.query(models.Station.company).distinct().all()
+    return [c[0] for c in companies if c[0]]

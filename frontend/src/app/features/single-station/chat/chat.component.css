@@ -61,6 +61,55 @@
   line-height: 1.5;
 }
 
+.message-content.markdown-body {
+  white-space: normal;
+}
+
+.message-content.markdown-body :is(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.9rem;
+}
+
+.message-content.markdown-body th,
+.message-content.markdown-body td {
+  border: 1px solid #d9e3f0;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.message-content.markdown-body th {
+  background: #eef2f8;
+  font-weight: 600;
+}
+
+.message-content.markdown-body p {
+  margin: 0 0 10px;
+}
+
+.message-content.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.message-content.markdown-body ul,
+.message-content.markdown-body ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.message-content.markdown-body code {
+  background: #eef2f8;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.85em;
+}
+
+.message.assistant {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .empty-state {
   color: var(--color-muted);
   text-align: center;

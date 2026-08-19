@@ -41,4 +41,22 @@ class Alert(Base):
     fuel_type = Column(String) 
     alert_type = Column(String)
     severity = Column(String)
-    message = Column(String) 
+    message = Column(String)
+
+    # Automation-agent workflow fields
+    status = Column(String, default="new")  # new | processing | acknowledged
+    handled_by = Column(String, nullable=True)  # "agent" | "system" | None
+    handled_at = Column(DateTime, nullable=True)
+
+
+# 4. IncidentLog Table: Audit trail of actions taken by the automation agent
+class IncidentLog(Base):
+    __tablename__ = "incident_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=func.now())
+    alert_id = Column(Integer, ForeignKey("alerts.id"))
+    action = Column(String)  # reorder | notify_manager | escalate
+    reason = Column(String)
+    payload = Column(String)  # JSON-encoded snapshot of the alert context
+    actor = Column(String, default="agent")

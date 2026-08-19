@@ -9,7 +9,9 @@
   <div class="chat-window">
     <div class="message" *ngFor="let message of messages" [ngClass]="message.role">
       <div class="message-role">{{ message.role === 'assistant' ? 'Agent' : 'You' }}</div>
-      <div class="message-content">{{ message.content }}</div>
+      <div class="message-content markdown-body" *ngIf="message.role === 'assistant'"
+        [innerHTML]="message.content | markdown"></div>
+      <div class="message-content" *ngIf="message.role !== 'assistant'">{{ message.content }}</div>
     </div>
 
     <div class="empty-state" *ngIf="messages.length === 0">
@@ -18,13 +20,8 @@
   </div>
 
   <form class="chat-input" (ngSubmit)="sendMessage()">
-    <textarea
-      [(ngModel)]="userInput"
-      name="message"
-      rows="4"
-      placeholder="Type your question here..."
-      [disabled]="isLoading"
-    ></textarea>
+    <textarea [(ngModel)]="userInput" name="message" rows="4" placeholder="Type your question here..."
+      [disabled]="isLoading"></textarea>
 
     <button type="submit" [disabled]="isLoading || !userInput.trim()">
       {{ isLoading ? 'Sending…' : 'Send' }}

@@ -14,7 +14,7 @@ load_dotenv()
 class Settings:
     # Groq
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"     # best free-tier model with tool calling support
+    GROQ_MODEL: str = "openai/gpt-oss-120b"     # best free-tier model with tool calling support (llama-3.3-70b-versatile was deprecated by Groq on 2026-08-16)
 
     # Backend integration
     BACKEND_MODE: str = os.getenv("BACKEND_MODE", "mock")   # "mock" | "real"

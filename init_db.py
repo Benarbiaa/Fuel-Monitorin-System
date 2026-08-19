@@ -1,7 +1,7 @@
 # init_db.py
-from backend.database import engine, Base
-from backend.models import Station, FuelData, Alert
+from backend.database.database import engine, Base, SQLALCHEMY_DATABASE_URL
+from backend.database import models  # noqa: F401  (import registers models on Base)
 
-print("Creating database tables...")
+print(f"Creating database tables at: {SQLALCHEMY_DATABASE_URL}")
 Base.metadata.create_all(bind=engine)
-print("Done! Check for 'sql_app.db' in your folder.")
+print("Done!")

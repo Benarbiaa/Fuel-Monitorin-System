@@ -76,7 +76,7 @@ def health() -> dict:
         "status": "ok",
         "service": "ai_features",
         "backend_mode": settings.BACKEND_MODE,
-        "gemini_model": settings.GEMINI_MODEL,
+        "groq_model": settings.GROQ_MODEL,
     }
 
 

@@ -69,7 +69,7 @@ Write a structured markdown report with:
 Be professional, concise, and actionable."""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",  # llama-3.3-70b-versatile was deprecated by Groq on 2026-08-16
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content

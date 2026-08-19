@@ -3,7 +3,48 @@ from ..database import models
 
 # --- WRITE METHODS ---
 
+# Best-effort display metadata for known simulator station IDs. Falls back to
+# generic values for any station_id we haven't seen before, so ingestion
+# never fails just because a station wasn't pre-registered.
+_KNOWN_STATIONS = {
+    "BI00001": {"company": "AGIL", "location": "Tunis Centre"},
+    "BI00002": {"company": "AGIL", "location": "Tunis Nord"},
+    "BI00003": {"company": "AGIL", "location": "Sousse"},
+}
+
+
+def get_or_create_station(db: Session, station_id: str) -> models.Station:
+    """
+    Fetch the Station row for station_id, creating it if it doesn't exist yet.
+
+    fuel_data.station_id has a foreign key to stations.station_id. Postgres
+    enforces this strictly (unlike SQLite, which ignores FKs by default), so
+    every station referenced by an incoming FuelData record must exist here
+    first or the insert will fail with a ForeignKeyViolation.
+    """
+    station = db.query(models.Station).filter(
+        models.Station.station_id == station_id
+    ).first()
+    if station:
+        return station
+
+    meta = _KNOWN_STATIONS.get(station_id, {})
+    station = models.Station(
+        station_id=station_id,
+        company=meta.get("company", "Unknown"),
+        location=meta.get("location", station_id),
+    )
+    db.add(station)
+    db.commit()
+    db.refresh(station)
+    return station
+
+
 def store_fuel_data(db: Session, data):
+    # Ensure the parent Station row exists before inserting the FuelData
+    # record that references it (see get_or_create_station for why).
+    get_or_create_station(db, data.station_id)
+
     new_record = models.FuelData(**data.dict())
     db.add(new_record)
     db.commit()
@@ -16,7 +57,8 @@ def create_alert(db: Session, station_id: str, fuel_type: str, alert_type: str, 
         fuel_type=fuel_type,
         alert_type=alert_type,
         severity=severity,
-        message=message
+        message=message,
+        status="new",
     )
     db.add(new_alert)
     db.commit()
