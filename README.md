@@ -1,6 +1,6 @@
 # Fuel Station Monitoring System
 
-A full-stack fuel monitoring and forecasting platform for AGIL fuel stations. Collects real-time telemetry, generates automated alerts, forecasts stock levels, and provides an AI-powered chat assistant.
+A full-stack fuel monitoring and forecasting platform for AGIL fuel stations. Collects real-time telemetry, generates automated alerts, forecasts stock levels, runs an autonomous response agent, and provides an AI-powered chat assistant with semantic search over past reports.
 
 ---
 
@@ -9,37 +9,40 @@ A full-stack fuel monitoring and forecasting platform for AGIL fuel stations. Co
 Three independent services + one simulation agent:
 
 ```
-pfa/
-├── backend/        FastAPI REST API              → port 8000
-├── chat/           AI chat microservice          → port 8001
-├── frontend/       Angular 16 dashboard          → port 4200
+Fuel-Monitorin-System/
+├── backend/        FastAPI REST API + automation agent   → port 8000
+├── chat/           AI chat microservice                  → port 8001
+├── frontend/       Angular 16 dashboard                  → port 4200
 └── stations/       Station simulation agent
 ```
+
+The backend and chat services are fully independent processes that only talk to each other over HTTP — the chat service never imports backend code directly.
 
 ---
 
 ## Features
 
-- **Real-time ingestion** — stations push fuel telemetry every few seconds
+- **Real-time ingestion** — stations push fuel telemetry, auto-registering new stations on first contact
 - **Automated alerts** — LOW_STOCK, PRICE_ANOMALY, HIGH_CONSUMPTION, STATION_CRITICAL
+- **Autonomous response agent** — background watcher polls for new critical alerts and uses an LLM to decide/execute an action (reorder, notify manager, or escalate), logging every decision to an audit trail
 - **Stock forecasting** — Prophet-based time-series predictions with LLM narrative
-- **AI chat assistant** — Groq-powered agent with tool-calling and RAG over historical alerts
-- **PDF reports** — LLM-generated station reports exported as PDF
+- **AI chat assistant** — Groq-powered agent with tool-calling over live stock/alerts/forecast data, plus semantic search over historical reports
+- **LLM-generated reports** — persisted station reports (Markdown + PDF export), searchable by the chat assistant for pattern/history questions
 - **Multi-station dashboard** — Angular SPA with live stock, history, alerts, forecast, and chat tabs
 
 ---
 
 ## Prerequisites
 
-- Python 3.10+
+- **Python 3.11 or 3.12** (avoid 3.14 — several dependencies, including `pydantic-core` and `prophet`'s stack, don't yet ship prebuilt wheels for it and will fail to build from source)
 - Node.js 18+ and npm
-- PostgreSQL 17
+- PostgreSQL 14+
 
 ---
 
 ## Docker (recommended)
 
-The fastest way to run the full stack.
+The fastest way to run the full stack — all services share one `DATABASE_URL` wired correctly to the bundled Postgres container.
 
 **Prerequisites:** Docker Desktop
 
@@ -68,16 +71,16 @@ docker compose down -v
 
 ---
 
-## Manual Setup
+## Manual Setup (running locally without Docker)
 
 ### 1. Python environment
 
 ```bash
-python -m venv venv
+python3.11 -m venv .venv
 # Windows
-venv\Scripts\activate
+.venv\Scripts\activate
 # macOS/Linux
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### 2. Backend dependencies
@@ -90,7 +93,7 @@ pip install -r requirements.txt
 
 ```bash
 cd frontend
-npm install --legacy-peer-deps
+npm install
 ```
 
 ### 4. Chat service dependencies
@@ -100,9 +103,19 @@ cd chat
 pip install -r requirements.txt
 ```
 
-### 5. Environment variables
+The first time the chat assistant searches past reports, `chromadb` downloads a small (~80MB) embedding model automatically — this needs normal internet access and only happens once (cached afterward).
 
-Copy the template and fill in your values:
+### 5. PostgreSQL setup
+
+Start your local Postgres server, then create the database once:
+
+```bash
+createdb fuelmonitor
+```
+
+### 6. Environment variables
+
+**Project root** — copy the template and fill in your values:
 
 ```bash
 cp .env.example .env
@@ -118,17 +131,20 @@ MANAGER_EMAIL=manager@example.com
 
 Get a free Groq API key at [console.groq.com](https://console.groq.com).
 
-Also configure `chat/.env`:
+**`chat/.env`** — the chat microservice runs as a separate process with its own environment file (no `.env.example` provided for it, create it manually):
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
 BACKEND_MODE=real
 BACKEND_URL=http://localhost:8000
+SERVICE_PORT=8001
 ```
 
-### 6. Initialize the database
+Set `BACKEND_MODE=mock` instead if you want to test the chat UI without running the backend at all — it'll use `chat/mocks/backend_mock.py` for fake data.
 
-Creates the PostgreSQL database and tables (run once):
+### 7. Initialize the database
+
+Creates the tables (run once; also happens automatically on backend startup, but useful for a clean first-time setup):
 
 ```bash
 python init_db.py
@@ -138,17 +154,18 @@ python init_db.py
 
 ## Running
 
-Start each service in a separate terminal, **in this order**:
+Start each service in a separate terminal:
 
 **Terminal 1 — Backend API**
 ```bash
 uvicorn backend.main:app --reload --port 8000
 ```
+Look for `🔍 Alert Watcher started` in the logs — confirms the automation agent is running alongside the API.
 
 **Terminal 2 — Chat microservice**
 ```bash
 cd chat
-python main.py
+uvicorn main:app --reload --port 8001
 ```
 
 **Terminal 3 — Frontend**
@@ -157,9 +174,10 @@ cd frontend
 npm start
 ```
 
-**Terminal 4 — Station agent**
+**Terminal 4 — Station agent (optional, feeds live test data)**
 ```bash
-python stations/agilAgentStation.py
+cd stations
+python agilAgentStation.py
 ```
 
 | Service | URL |
@@ -183,56 +201,92 @@ python stations/agilAgentStation.py
 
 ---
 
+## Automation Agent
+
+Every alert has a `status` field (`new` → `processing` → `acknowledged`). A background watcher in the backend process polls for `critical` alerts with `status="new"`, hands each one to an LLM (`responder.py`) to decide an action — `reorder`, `notify_manager`, or `escalate` — and executes it via `actions.py` (email/log). Every decision is recorded in the `incident_logs` table for audit purposes.
+
+**Known limitation:** if the LLM call fails (bad API key, rate limit, network issue), the alert stays stuck in `processing` and is never retried, since the watcher only polls `status="new"` alerts. Worth adding retry-with-backoff logic if this matters for your use case.
+
+---
+
 ## Project Structure
 
 ```
 backend/
-├── main.py                  FastAPI app + startup
-├── schemas.py               Pydantic request/response models
+├── main.py                  FastAPI app, startup, and automation-agent watcher launch
+├── schemas.py                Pydantic request/response models
 ├── database/
-│   ├── models.py            SQLAlchemy ORM models
-│   └── database.py          DB engine and session factory
+│   ├── models.py             SQLAlchemy ORM models (Station, FuelData, Alert, IncidentLog, Report)
+│   └── database.py           DB engine — reads DATABASE_URL, falls back to SQLite for quick local dev
 ├── routes/
-│   ├── ingest.py            POST /ingest
-│   ├── data.py              GET /stations /current /history /alerts
-│   ├── prophet_routes.py    GET /predict
-│   └── report_routes.py     GET /report
+│   ├── ingest.py              POST /ingest
+│   ├── data.py                GET /stations /companies /current /history /alerts
+│   ├── prophet_routes.py      GET /predict
+│   └── report_routes.py       GET /report /report/pdf /reports (list history)
 ├── services/
-│   ├── storage.py           DB read/write helpers
-│   ├── prophet_service.py   Stock forecasting
-│   └── report_services.py   LLM report generation
+│   ├── storage.py             DB read/write helpers, auto-registers new stations on ingest
+│   ├── prophet_service.py     Stock forecasting
+│   └── report_services.py     LLM report generation
 └── agent/
-    ├── watcher.py           Polls DB for critical alerts
-    ├── responder.py         LLM decision-making for alerts
-    └── actions.py           Executes alert actions (email, reorder)
+    ├── watcher.py              Polls DB for critical alerts (status="new")
+    ├── responder.py            LLM decision-making for alerts
+    └── actions.py               Executes alert actions (email, reorder, escalate) + incident log
 
 chat/
-├── main.py                  FastAPI app + RAG startup indexing
-├── config.py                Settings from environment
-├── schemas.py               Chat request/response models
+├── main.py                    FastAPI app entry point
+├── config.py                  Settings from environment
+├── schemas.py                 Chat request/response models
 ├── routes/
-│   ├── chat.py              POST /chat
-│   └── alerts.py            GET /alerts (with LLM enrichment)
+│   ├── chat.py                 POST /chat
+│   └── alerts.py                GET /alerts (with LLM enrichment)
 ├── services/
-│   ├── gemini_service.py    Groq LLM tool-calling loop
-│   ├── agent_tools.py       Tool implementations (stock, alerts, forecast)
-│   ├── retriever.py         ChromaDB RAG over historical alerts
-│   └── alert_enricher.py   Async LLM alert explanations
+│   ├── gemini_service.py        Groq LLM tool-calling loop
+│   ├── agent_tools.py           Tool implementations (stock, alerts, forecast, report search)
+│   ├── report_retriever.py      ChromaDB semantic search over persisted reports
+│   └── alert_enricher.py        Async LLM alert explanations
 └── mocks/
-    └── backend_mock.py      Mock data for offline development
+    └── backend_mock.py          Mock data for offline development (BACKEND_MODE=mock)
 
 frontend/src/app/
 ├── core/
-│   ├── models/              TypeScript interfaces
-│   └── services/            HTTP services for all API endpoints
-├── shared/                  Reusable components and pipes
+│   ├── models/                 TypeScript interfaces
+│   └── services/                HTTP services for all API endpoints
+├── shared/                     Reusable components and pipes
 └── features/
-    ├── single-station/      Tabbed station view (overview, history, alerts, forecast, chat, report)
-    └── multi-station/       Fleet overview with station cards and global alerts
+    ├── single-station/          Tabbed station view (overview, history, alerts, forecast, chat, report)
+    └── multi-station/            Fleet overview with station cards and global alerts
 
 stations/
-└── agilAgentStation.py      Simulates 5 AGIL stations sending telemetry
+└── agilAgentStation.py          Simulates a station sending live telemetry
 ```
+
+---
+
+## AI / Chat Assistant Tools
+
+The chat agent (`chat/services/gemini_service.py`) has access to these tools, dispatched via `chat/services/agent_tools.py`:
+
+| Tool | Purpose |
+|---|---|
+| `get_current_stock` | Live stock/price for one or all stations |
+| `get_fuel_history` | Historical fuel data for trends |
+| `get_alerts` | Structured alert lookup (filterable by station/severity/type) |
+| `get_station_count` | Total stations in the network |
+| `get_lowest_stock` | Stations ranked by lowest stock % |
+| `get_station_summary` | Full snapshot of one station |
+| `get_critical_alerts` | Urgent alerts across the network |
+| `predict_stock` | Prophet-based forecast for a station/fuel type |
+| `search_past_reports` | Semantic search over previously generated reports — for pattern/history questions that don't map to a structured filter |
+
+`search_past_reports` re-indexes from the backend's `/reports` endpoint on every call rather than relying on a separate background sync job — this keeps it self-healing and always fresh at the cost of a small amount of repeated work per search.
+
+---
+
+## Known Limitations / Things to Revisit
+
+- **`/report` makes a live, uncached Groq API call every time it's hit** — repeated requests (e.g. tab switches) each trigger a fresh LLM call. Worth caching by station_id with a short TTL if cost/latency becomes a concern.
+- **Stuck alerts on repeated LLM failures** — see "Automation Agent" above.
+- Frontend has known `npm audit` findings inherited from the Angular 16 dependency tree (54 vulnerabilities at last check, mostly transitive). Not urgent, but worth revisiting during a future Angular upgrade.
 
 ---
 
@@ -242,8 +296,8 @@ stations/
 |---|---|
 | Backend | Python, FastAPI, SQLAlchemy, PostgreSQL |
 | Forecasting | Prophet, pandas |
-| AI / LLM | Groq (llama-3.3-70b-versatile, llama-3.1-8b-instant) |
-| RAG | ChromaDB + sentence-transformers |
+| AI / LLM | Groq (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`) |
+| RAG | ChromaDB + sentence-transformers, over persisted LLM-generated reports |
 | Reports | ReportLab, Markdown |
-| Frontend | Angular 16, Chart.js |
+| Frontend | Angular 16, Chart.js, ngx-markdown |
 | Communication | REST over HTTP |

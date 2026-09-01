@@ -151,6 +151,35 @@ def _tool_predict_stock(station_id: str, fuel_type: str, periods: int = 24) -> A
     return _get("/predict", {"station_id": station_id, "fuel_type": fuel_type, "periods": periods})
 
 
+def _tool_search_past_reports(query: str, station_id: str | None = None, k: int = 3) -> Any:
+    """
+    Semantic search over previously generated LLM reports.
+
+    Reports are free-text narrative, so unlike alerts (small fixed taxonomy),
+    exact filters don't help here — this refreshes the vector index from the
+    backend's persisted reports, then does a similarity search over their
+    content so the agent can answer pattern/history questions that structured
+    tools can't (e.g. "what did past reports say about X").
+    """
+    if settings.is_mock():
+        return {"error": "report search not available in mock mode"}
+
+    # Re-fetch and re-index on every call — keeps the index fresh with no
+    # separate background sync process to maintain.
+    from . import report_retriever as _rr_module
+
+    params: dict = {"limit": 200}
+    if station_id:
+        params["station_id"] = station_id
+    reports = _get("/reports", params)
+    _rr_module.report_retriever.index_reports(reports)
+
+    context = _rr_module.report_retriever.retrieve(query, station_id=station_id, k=k)
+    if not context:
+        return {"result": "No relevant past reports found."}
+    return {"result": context}
+
+
 # ---------------------------------------------------------------------------
 # Public dispatcher — called by gemini_service.py
 # ---------------------------------------------------------------------------
@@ -164,6 +193,7 @@ _TOOL_MAP = {
     "get_station_summary":  _tool_get_station_summary,
     "get_critical_alerts":  _tool_get_critical_alerts,
     "predict_stock":        _tool_predict_stock,
+    "search_past_reports":  _tool_search_past_reports,
 }
 
 

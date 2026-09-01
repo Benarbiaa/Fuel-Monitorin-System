@@ -217,6 +217,38 @@ _TOOL_DECLARATIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_past_reports",
+            "description": (
+                "Semantic search over previously generated station reports (free-text narrative "
+                "covering stock status, alert analysis, and forecasts). Use this for pattern or "
+                "history questions that don't map to an exact filter — e.g. 'what did past reports "
+                "say about SansPlomb consumption spikes?' or 'has this kind of issue come up before?'. "
+                "Do NOT use this for current/live data — use get_current_stock, get_alerts, or "
+                "predict_stock instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language description of what to search for in past reports.",
+                    },
+                    "station_id": {
+                        "type": "string",
+                        "description": "Restrict the search to one station. Omit to search across all stations.",
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Number of past reports to return (default 3).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -236,6 +268,7 @@ Key domain facts:
 
 Guidelines:
 - Always call the appropriate tool before answering questions about stock, alerts, or forecasts.
+- For questions about past reports, patterns, or "has this happened before" that don't map to an exact filter, use search_past_reports instead of guessing.
 - Give concise, actionable answers. When stock is low, suggest reordering.
 - Do not fabricate numbers — if a tool returns no data, say so.
 - Respond in the same language the operator uses (French or English).

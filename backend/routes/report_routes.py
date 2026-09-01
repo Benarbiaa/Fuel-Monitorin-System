@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from ..database.database import get_db
+from ..database import models
 from ..services.report_services import generate_report
 import markdown
 from reportlab.lib.pagesizes import A4
@@ -13,13 +14,46 @@ import io, re
 
 router = APIRouter()
 
+
+def _persist_report(db: Session, station_id: str, content: str) -> models.Report:
+    """Save a generated report so it can be listed/searched later."""
+    record = models.Report(station_id=station_id, content=content)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
 @router.get("/report")
 def get_report(
     station_id: str = Query(...),
     db: Session = Depends(get_db)
 ):
     report = generate_report(db, station_id)
+    _persist_report(db, station_id, report)
     return {"station_id": station_id, "report": report}
+
+
+@router.get("/reports")
+def list_reports(
+    station_id: str | None = Query(None, description="Filter by station. Omit for all stations."),
+    limit: int = Query(20, le=200),
+    db: Session = Depends(get_db)
+):
+    """List previously generated reports, most recent first."""
+    query = db.query(models.Report)
+    if station_id:
+        query = query.filter(models.Report.station_id == station_id)
+    results = query.order_by(models.Report.timestamp.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "station_id": r.station_id,
+            "timestamp": r.timestamp,
+            "content": r.content,
+        }
+        for r in results
+    ]
 
 
 @router.get("/report/pdf")
@@ -28,6 +62,7 @@ def get_report_pdf(
     db: Session = Depends(get_db)
 ):
     report_md = generate_report(db, station_id)
+    _persist_report(db, station_id, report_md)
     
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4,
