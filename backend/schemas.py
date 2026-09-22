@@ -15,6 +15,22 @@ class FuelData(BaseModel):
     sales_last_5min_liters: float = Field(..., ge=0)
 
 
+class IngestAcceptedResponse(BaseModel):
+    """
+    Returned by POST /ingest once ingestion is Kafka-backed. Deliberately
+    does NOT include an `id` — unlike FuelDataResponse, nothing has been
+    written to the database yet at the point this response is sent. The
+    actual write happens moments later, asynchronously, in the ingestion
+    consumer. This schema exists so the response honestly reflects "queued
+    for processing", not "stored", which is what /ingest used to (and can
+    no longer truthfully) claim.
+    """
+    status: Literal["accepted"] = "accepted"
+    station_id: str
+    fuel_type: str
+    timestamp: datetime
+
+
 class FuelDataResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

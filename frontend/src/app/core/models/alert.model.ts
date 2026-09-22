@@ -4,7 +4,8 @@ export type AlertType =
   | 'LOW_STOCK'
   | 'PRICE_ANOMALY'
   | 'HIGH_CONSUMPTION'
-  | 'STATION_CRITICAL';
+  | 'STATION_CRITICAL'
+  | 'RESTOCK';
 
 export interface FuelAlert {
   timestamp: string;

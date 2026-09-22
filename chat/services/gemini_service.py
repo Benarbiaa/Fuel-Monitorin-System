@@ -85,8 +85,9 @@ _TOOL_DECLARATIONS = [
         "function": {
             "name": "get_alerts",
             "description": (
-                "Fetch active alerts. Severity levels: 'warning' or 'critical'. "
-                "Alert types: LOW_STOCK, PRICE_ANOMALY, HIGH_CONSUMPTION, STATION_CRITICAL. "
+                "Fetch active alerts. Severity levels: 'info', 'warning', or 'critical'. "
+                "Alert types: LOW_STOCK, PRICE_ANOMALY, HIGH_CONSUMPTION, STATION_CRITICAL, RESTOCK "
+                "(RESTOCK is informational only — logged when a delivery truck refills a tank, not a problem). "
                 "Use when the operator asks about warnings, problems, or anything that needs attention."
             ),
             "parameters": {
@@ -98,12 +99,12 @@ _TOOL_DECLARATIONS = [
                     },
                     "severity": {
                         "type": "string",
-                        "enum": ["warning", "critical"],
+                        "enum": ["info", "warning", "critical"],
                         "description": "Filter by severity level.",
                     },
                     "alert_type": {
                         "type": "string",
-                        "enum": ["LOW_STOCK", "PRICE_ANOMALY", "HIGH_CONSUMPTION", "STATION_CRITICAL"],
+                        "enum": ["LOW_STOCK", "PRICE_ANOMALY", "HIGH_CONSUMPTION", "STATION_CRITICAL", "RESTOCK"],
                         "description": "Filter by alert type.",
                     },
                 },
@@ -394,4 +395,4 @@ Respond ONLY as valid JSON with exactly these two keys:
         return data.get("explanation", ""), data.get("recommended_action", "")
     except Exception as exc:
         logger.warning("explain_alert failed for alert %s: %s", alert.get("id"), exc)
-        return "Unable to generate explanation.", "Please review this alert manually."
+        return "Unable to generate explanation.", "Please review this alert manually."  

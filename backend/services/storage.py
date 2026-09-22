@@ -51,6 +51,38 @@ def store_fuel_data(db: Session, data):
     db.refresh(new_record)
     return new_record
 
+
+def store_fuel_data_idempotent(db: Session, data):
+    """
+    Like store_fuel_data, but safe to call more than once with the same
+    (station_id, fuel_type, timestamp) — which happens under Kafka's
+    at-least-once delivery whenever a message is reprocessed (e.g. after a
+    consumer crash/restart before its offset was committed).
+
+    Returns the inserted FuelData record, or None if a record with this
+    exact key already existed (meaning: this message was already processed
+    previously; the caller should skip alert generation for it and just
+    move on to committing the Kafka offset).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    get_or_create_station(db, data.station_id)
+
+    new_record = models.FuelData(**data.dict())
+    db.add(new_record)
+    try:
+        db.commit()
+    except IntegrityError:
+        # The unique constraint on (station_id, fuel_type, timestamp)
+        # rejected this insert — we've already stored this exact reading.
+        # Roll back the failed transaction so this session can keep being
+        # used for the next message, and report "nothing new happened".
+        db.rollback()
+        return None
+
+    db.refresh(new_record)
+    return new_record
+
 def create_alert(db: Session, station_id: str, fuel_type: str, alert_type: str, severity: str, message: str):
     new_alert = models.Alert(
         station_id=station_id,
