@@ -2,19 +2,27 @@
 
 A full-stack fuel monitoring and forecasting platform for AGIL fuel stations. Collects real-time telemetry, generates automated alerts, forecasts stock levels, runs an autonomous response agent, and provides an AI-powered chat assistant with semantic search over past reports.
 
+> **Reviewing this project?** [`docs/demo-script.md`](docs/demo-script.md) walks through the Kafka ingestion pipeline live in ~5 minutes, and [`docs/debugging/timestamp-timezone-bug.md`](docs/debugging/timestamp-timezone-bug.md) is a full writeup of a real bug found and fixed during development — how it was investigated, where the investigation initially went wrong, and why.
+
 ---
 
 ## Architecture
 
-Three independent services + one simulation agent:
+Ingestion is event-driven, backed by Kafka; everything else is independent HTTP services + one simulation agent:
 
 ```
 Fuel-Monitorin-System/
-├── backend/        FastAPI REST API + automation agent   → port 8000
-├── chat/           AI chat microservice                  → port 8001
-├── frontend/       Angular 16 dashboard                  → port 4200
-└── stations/       Station simulation agent
+├── backend/               FastAPI REST API + automation agent      → port 8000
+├── ingestion_consumer/    Kafka consumer, sole writer to Postgres
+├── kafka_common/          Shared Kafka producer wrapper
+├── chat/                  AI chat microservice                     → port 8001
+├── frontend/               Angular 16 dashboard                    → port 4200
+└── stations/              Station simulation agent (Kafka producer)
 ```
+
+**Ingestion pipeline:** station telemetry (from the simulator, or from `POST /ingest`) is published to a Kafka topic (`fuel.readings.raw`), keyed by `station_id:fuel_type` to preserve per-tank ordering. A dedicated consumer service validates each message, writes it to Postgres idempotently (unique constraint on `station_id` + `fuel_type` + `timestamp`, safe under Kafka's at-least-once delivery), and generates alerts. `/ingest` itself no longer writes to the database — it's a thin producer that returns `202 Accepted` once the reading is queued. Malformed messages are routed to a dead-letter topic (`fuel.readings.dlq`) instead of blocking the pipeline. See [`docs/adr/0001-kafka-ingestion.md`](docs/adr/0001-kafka-ingestion.md) for the full rationale, alternatives considered, and known local-dev gotchas.
+
+This was a deliberate migration from an earlier version where `/ingest` wrote synchronously to the database in the same request — see the ADR for why that was limiting (no replay, no backpressure isolation, ingestion coupled to DB write throughput).
 
 The backend and chat services are fully independent processes that only talk to each other over HTTP — the chat service never imports backend code directly.
 
@@ -22,8 +30,9 @@ The backend and chat services are fully independent processes that only talk to 
 
 ## Features
 
-- **Real-time ingestion** — stations push fuel telemetry, auto-registering new stations on first contact
-- **Automated alerts** — LOW_STOCK, PRICE_ANOMALY, HIGH_CONSUMPTION, STATION_CRITICAL
+- **Kafka-backed ingestion** — replayable event log, idempotent writes, dead-letter handling for malformed data
+- **Real-time telemetry** — stations push fuel readings every 10 minutes, auto-registering new stations on first contact
+- **Automated alerts** — LOW_STOCK, PRICE_ANOMALY, HIGH_CONSUMPTION, STATION_CRITICAL, RESTOCK (delivery detection, inferred from stock-level increases)
 - **Autonomous response agent** — background watcher polls for new critical alerts and uses an LLM to decide/execute an action (reorder, notify manager, or escalate), logging every decision to an audit trail
 - **Stock forecasting** — Prophet-based time-series predictions with LLM narrative
 - **AI chat assistant** — Groq-powered agent with tool-calling over live stock/alerts/forecast data, plus semantic search over historical reports
@@ -156,29 +165,42 @@ python init_db.py
 
 Start each service in a separate terminal:
 
-**Terminal 1 — Backend API**
+**Terminal 1 — Kafka (required for ingestion)**
+```bash
+./scripts/start-kafka.sh
+```
+Starts a single-broker Kafka container (KRaft mode) and creates the `fuel.readings.raw` / `fuel.readings.dlq` topics if they don't already exist. See [`docs/adr/0001-kafka-ingestion.md`](docs/adr/0001-kafka-ingestion.md) if you need to understand or troubleshoot this.
+
+**Terminal 2 — Backend API**
 ```bash
 uvicorn backend.main:app --reload --port 8000
 ```
 Look for `🔍 Alert Watcher started` in the logs — confirms the automation agent is running alongside the API.
 
-**Terminal 2 — Chat microservice**
+**Terminal 3 — Ingestion consumer (required — this is what actually writes readings to the database)**
+```bash
+python -m ingestion_consumer.main
+```
+`/ingest` and the station agent both only publish to Kafka; nothing is persisted until this consumer processes it.
+
+**Terminal 4 — Chat microservice**
 ```bash
 cd chat
 uvicorn main:app --reload --port 8001
 ```
 
-**Terminal 3 — Frontend**
+**Terminal 5 — Frontend**
 ```bash
 cd frontend
 npm start
 ```
 
-**Terminal 4 — Station agent (optional, feeds live test data)**
+**Terminal 6 — Station agent (optional, feeds live test data every 10 minutes)**
 ```bash
 cd stations
-python agilAgentStation.py
+python agilAgentStation.py --sink kafka
 ```
+`--sink http` is also available, which routes through `POST /ingest` instead of publishing to Kafka directly — useful for testing the HTTP path specifically, though since `/ingest` itself now just publishes to Kafka too (see Architecture), this adds an extra hop rather than bypassing Kafka entirely.
 
 | Service | URL |
 |---|---|
@@ -284,8 +306,11 @@ The chat agent (`chat/services/gemini_service.py`) has access to these tools, di
 
 ## Known Limitations / Things to Revisit
 
+- **Schema changes require a full table drop/recreate** — the project uses `Base.metadata.create_all()`, which only creates missing tables and never alters existing ones. Two schema changes during the Kafka migration (a unique constraint, and switching timestamp columns to `timezone=True`) both required manually dropping and recreating tables. This is fine for a solo dev project with disposable data, but is exactly the gap Alembic migrations exist to close — worth adding before this schema changes again.
 - **`/report` makes a live, uncached Groq API call every time it's hit** — repeated requests (e.g. tab switches) each trigger a fresh LLM call. Worth caching by station_id with a short TTL if cost/latency becomes a concern.
 - **Stuck alerts on repeated LLM failures** — see "Automation Agent" above.
+- **Kafka runs as a single broker with `replication.factor=1` everywhere**, including its internal topics — correct and necessary for a one-node local dev setup, but not representative of how a production cluster would be configured (see the ADR's "Known gotcha" section for why this specific setting matters).
+- **API timestamps are returned in the server's local timezone offset, not normalized to UTC** — e.g. a UTC-submitted reading may come back as `...+01:00` rather than `...Z`. The underlying value is correct (Postgres stores `TIMESTAMPTZ`, true UTC internally), but this is worth normalizing at the API boundary for a cleaner, less locale-dependent contract. See `docs/debugging/timestamp-timezone-bug.md` for the full story of how a related bug was found and fixed.
 - Frontend has known `npm audit` findings inherited from the Angular 16 dependency tree (54 vulnerabilities at last check, mostly transitive). Not urgent, but worth revisiting during a future Angular upgrade.
 
 ---
@@ -294,10 +319,11 @@ The chat agent (`chat/services/gemini_service.py`) has access to these tools, di
 
 | Layer | Technology |
 |---|---|
+| Ingestion | Apache Kafka (KRaft mode), confluent-kafka-python |
 | Backend | Python, FastAPI, SQLAlchemy, PostgreSQL |
 | Forecasting | Prophet, pandas |
 | AI / LLM | Groq (`openai/gpt-oss-120b`, `openai/gpt-oss-20b`) |
 | RAG | ChromaDB + sentence-transformers, over persisted LLM-generated reports |
 | Reports | ReportLab, Markdown |
 | Frontend | Angular 16, Chart.js, ngx-markdown |
-| Communication | REST over HTTP |
+| Communication | Kafka (ingestion) + REST over HTTP (everything else) |
